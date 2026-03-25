@@ -1,6 +1,22 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
-const INITIAL_DATA = {
+// ─── SUPABASE CONFIG ───────────────────────────────────────────────────────────
+const SUPABASE_URL = "https://litnauihwmilzyieucvn.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxpdG5hdWlod21pbHp5aWV1Y3ZuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ0MzA0MjcsImV4cCI6MjA5MDAwNjQyN30.M5U7-42LshhxGoGpBAazJDojMWg0ZJOa4OaPRfLQzjI";
+const H = { "Content-Type": "application/json", "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` };
+
+async function sbFetch(path, opts = {}) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1${path}`, { headers: H, ...opts });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err);
+  }
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+
+// ─── INITIAL SEED DATA ─────────────────────────────────────────────────────────
+const SEED_DATA = {
   "Pasta & Italiaans": ["Lasagnette / Lasagne","Macaroni","Spaghetti (rode saus, gehakt, spekjes of kip)","Tortellini (spinazie, tomaat of pompoensaus)","Gnocchi (pesto, roomsaus, courgette of citroenkip)","Cannelloni (spinazie)","Verse pasta (asperges, spinazie of spinazie & spekjes)","Orzo","Pasta bolognese","Melanzane","Gevulde courgette / Gevulde paprika"],
   "Rijst & Aziatisch": ["Kip piri piri met rijst","Nasi (ook quinoa nasi)","Babi ketjap","Bami","Noodles met kipgehakt en wokgroenten","Risotto (ook met asperges of champignons)","Gele curry met rijst en naanbrood","Kip madras","Paella","Rijstevellen gevuld","Gebakken rijst met dumplings en oosterse kip","Biefstuk met wokgroenten en rijst","Gewokte garnalen met witlof en rijst"],
   "Aardappels, Vlees & Groenten": ["Pomme duchesse / Aardappeltorentjes","Gehaktballetjes in madeira roomsaus","Boerenkool stamppot","Andijviestamppot","Spruitjes stamppot","Stoofvlees (Zwolse stoof of pittig)","Biefstuk met broccoli en krieltjes","Kip uit de oven met broccoli en krieltjes","Varkenshaas met broccoli en aardappel","Gepaneerde kipfilet met wortel en pastinaak","Rosti ovenschotel met kip en witlof","Asperges met kriel, schnitzel en ei"],
@@ -15,12 +31,11 @@ const CAT_ICONS = {
   "Wraps & Mexicaans":"🌯","Salades & Gezonde Bowls":"🥗","Pizza, Burgers & Fastfood":"🍕","Overig":"🍳"
 };
 
-// Week starts Monday
-const WEEK_DAYS = ["Maandag","Dinsdag","Woensdag","Donderdag","Vrijdag","Zaterdag","Zondag"];
+const WEEK_DAYS     = ["Maandag","Dinsdag","Woensdag","Donderdag","Vrijdag","Zaterdag","Zondag"];
 const WEEK_DAYS_SHORT = ["Ma","Di","Wo","Do","Vr","Za","Zo"];
-const DAYS_NL_SUN = ["Zondag","Maandag","Dinsdag","Woensdag","Donderdag","Vrijdag","Zaterdag"];
+const DAYS_NL_SUN   = ["Zondag","Maandag","Dinsdag","Woensdag","Donderdag","Vrijdag","Zaterdag"];
 
-function seededRandom(seed) { let x = Math.sin(seed)*10000; return x-Math.floor(x); }
+function seededRandom(seed) { const x = Math.sin(seed)*10000; return x-Math.floor(x); }
 function getDailySuggestion(dishes) {
   const all = Object.values(dishes).flat();
   if (!all.length) return null;
@@ -28,182 +43,244 @@ function getDailySuggestion(dishes) {
   const seed = t.getFullYear()*10000+(t.getMonth()+1)*100+t.getDate();
   return all[Math.floor(seededRandom(seed)*all.length)];
 }
+function getWeekKey(date = new Date()) {
+  const d = new Date(date); d.setHours(0,0,0,0);
+  d.setDate(d.getDate()+4-(d.getDay()||7));
+  const y = new Date(d.getFullYear(),0,1);
+  return `${d.getFullYear()}-W${String(Math.ceil((((d-y)/86400000)+1)/7)).padStart(2,"0")}`;
+}
+function getMonday(date = new Date()) {
+  const d = new Date(date), day = d.getDay();
+  d.setDate(d.getDate()+((day===0)?-6:1-day)); d.setHours(0,0,0,0); return d;
+}
 
 function Highlight({ text, query }) {
   if (!query) return <>{text}</>;
   const idx = text.toLowerCase().indexOf(query.toLowerCase());
-  if (idx === -1) return <>{text}</>;
+  if (idx===-1) return <>{text}</>;
   return <>{text.slice(0,idx)}<mark style={{background:"#e8c547",borderRadius:3,padding:"0 2px"}}>{text.slice(idx,idx+query.length)}</mark>{text.slice(idx+query.length)}</>;
 }
 
-// Get current week key: "YYYY-Www"
-function getWeekKey(date = new Date()) {
-  const d = new Date(date);
-  d.setHours(0,0,0,0);
-  d.setDate(d.getDate() + 4 - (d.getDay()||7));
-  const yearStart = new Date(d.getFullYear(),0,1);
-  const weekNo = Math.ceil((((d-yearStart)/86400000)+1)/7);
-  return `${d.getFullYear()}-W${String(weekNo).padStart(2,'0')}`;
-}
-
-// Get Monday of current week
-function getMonday(date = new Date()) {
-  const d = new Date(date);
-  const day = d.getDay();
-  const diff = (day === 0) ? -6 : 1 - day;
-  d.setDate(d.getDate() + diff);
-  d.setHours(0,0,0,0);
-  return d;
-}
-
+// ─── APP ───────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [dishes, setDishes] = useState(INITIAL_DATA);
-  const [view, setView] = useState("home"); // home | browse | category | search | week
+  // dishes: { category: [{ id, name }] }
+  const [dishes, setDishes]       = useState({});
+  const [weekMenu, setWeekMenu]   = useState({}); // { dayName: { id, dish } }
+  const [view, setView]           = useState("home");
   const [activeCategory, setActiveCategory] = useState(null);
-  const [newDish, setNewDish] = useState("");
-  const [newCategory, setNewCategory] = useState("");
-  const [addingTo, setAddingTo] = useState(null);
-  const [showAddCategory, setShowAddCategory] = useState(false);
-  const [saveStatus, setSaveStatus] = useState("");
-  const [loaded, setLoaded] = useState(false);
+  const [loaded, setLoaded]       = useState(false);
+  const [status, setStatus]       = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [moveTarget, setMoveTarget] = useState(null);
 
-  // Week menu: { "YYYY-Www": { "Maandag": "dish or null", ... } }
-  const [weekMenus, setWeekMenus] = useState({});
-  // Day picker: { dish, source: "catalog"|"manual" }
-  const [dayPicker, setDayPicker] = useState(null);
-  // Manual add to week
-  const [manualDish, setManualDish] = useState("");
+  const [newDish, setNewDish]         = useState("");
+  const [addingTo, setAddingTo]       = useState(null);
+  const [newCategory, setNewCategory] = useState("");
+  const [showAddCategory, setShowAddCategory] = useState(false);
+  const [moveTarget, setMoveTarget]   = useState(null);
+
+  const [dayPicker, setDayPicker]         = useState(null);
   const [showManualAdd, setShowManualAdd] = useState(false);
-  // Save to category from week
-  const [saveToCatTarget, setSaveToCatTarget] = useState(null); // dish string
-  // Confirm clear
+  const [manualDay, setManualDay]         = useState(null);
+  const [manualDish, setManualDish]       = useState("");
+  const [saveToCatTarget, setSaveToCatTarget] = useState(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   const searchRef = useRef(null);
-  const today = new Date();
-  const weekKey = getWeekKey(today);
-  const monday = getMonday(today);
+  const today       = new Date();
+  const weekKey     = getWeekKey(today);
+  const monday      = getMonday(today);
+  const todayWeekIdx = today.getDay()===0 ? 6 : today.getDay()-1;
   const todayDayName = DAYS_NL_SUN[today.getDay()];
-  // map sunday=0 -> index in WEEK_DAYS: Mon=0..Sun=6
-  const todayWeekIdx = today.getDay() === 0 ? 6 : today.getDay() - 1;
 
-  const currentWeek = weekMenus[weekKey] || {};
+  function flash(msg, dur=2200) { setStatus(msg); setTimeout(()=>setStatus(""), dur); }
 
-  // Load
-  useEffect(() => {
-    async function load() {
-      try {
-        const r1 = await window.storage.get("avondeten-dishes", true);
-        if (r1?.value) setDishes(JSON.parse(r1.value));
-      } catch(e) {}
-      try {
-        const r2 = await window.storage.get("avondeten-weekmenus", true);
-        if (r2?.value) setWeekMenus(JSON.parse(r2.value));
-      } catch(e) {}
-      setLoaded(true);
+  // ── LOAD ──────────────────────────────────────────────────────────────────
+  const loadDishes = useCallback(async () => {
+    const rows = await sbFetch("/dishes?select=id,category,name&order=created_at.asc");
+    const grouped = {};
+    for (const row of rows) {
+      if (!grouped[row.category]) grouped[row.category] = [];
+      grouped[row.category].push({ id: row.id, name: row.name });
     }
-    load();
+    // Preserve category order (seed categories first if empty)
+    setDishes(grouped);
+    return grouped;
   }, []);
 
-  async function saveDishes(d) {
-    try {
-      await window.storage.set("avondeten-dishes", JSON.stringify(d), true);
-      flash("✓ Opgeslagen");
-    } catch(e) { flash("⚠ Opslaan mislukt"); }
-  }
+  const loadWeekMenu = useCallback(async () => {
+    const rows = await sbFetch(`/week_menu?select=id,day_name,dish&week_key=eq.${weekKey}`);
+    const mapped = {};
+    for (const row of rows) mapped[row.day_name] = { id: row.id, dish: row.dish };
+    setWeekMenu(mapped);
+  }, [weekKey]);
 
-  async function saveWeeks(w) {
-    try {
-      await window.storage.set("avondeten-weekmenus", JSON.stringify(w), true);
-      flash("✓ Opgeslagen");
-    } catch(e) { flash("⚠ Opslaan mislukt"); }
-  }
+  useEffect(() => {
+    async function init() {
+      try {
+        const grouped = await loadDishes();
+        // Seed if completely empty
+        if (Object.keys(grouped).length === 0) {
+          flash("📦 Eerste keer laden, gerechten worden toegevoegd...", 4000);
+          const inserts = Object.entries(SEED_DATA).flatMap(([category, names]) =>
+            names.map(name => ({ category, name }))
+          );
+          await sbFetch("/dishes", {
+            method: "POST",
+            headers: { ...H, "Prefer": "return=minimal" },
+            body: JSON.stringify(inserts)
+          });
+          await loadDishes();
+        }
+        await loadWeekMenu();
+      } catch(e) {
+        flash("⚠ Verbinding mislukt: " + e.message, 5000);
+      }
+      setLoaded(true);
+    }
+    init();
+  }, [loadDishes, loadWeekMenu]);
 
-  function flash(msg) {
-    setSaveStatus(msg);
-    setTimeout(() => setSaveStatus(""), 2200);
-  }
-
-  // Dishes CRUD
-  function addDish() {
+  // ── DISHES CRUD ───────────────────────────────────────────────────────────
+  async function addDish() {
     if (!newDish.trim() || !addingTo) return;
-    const updated = { ...dishes, [addingTo]: [...(dishes[addingTo]||[]), newDish.trim()] };
-    setDishes(updated); saveDishes(updated);
+    try {
+      const [row] = await sbFetch("/dishes?select=id,category,name", {
+        method: "POST",
+        headers: { ...H, "Prefer": "return=representation" },
+        body: JSON.stringify({ category: addingTo, name: newDish.trim() })
+      });
+      setDishes(prev => ({ ...prev, [addingTo]: [...(prev[addingTo]||[]), { id: row.id, name: row.name }] }));
+      flash("✓ Opgeslagen");
+    } catch(e) { flash("⚠ " + e.message); }
     setNewDish(""); setAddingTo(null);
   }
-  function removeDish(cat, dish) {
-    const updated = { ...dishes, [cat]: dishes[cat].filter(d=>d!==dish) };
-    setDishes(updated); saveDishes(updated);
+
+  async function removeDish(cat, id) {
+    try {
+      await sbFetch(`/dishes?id=eq.${id}`, { method: "DELETE" });
+      setDishes(prev => ({ ...prev, [cat]: prev[cat].filter(d=>d.id!==id) }));
+      flash("✓ Verwijderd");
+    } catch(e) { flash("⚠ " + e.message); }
   }
-  function moveDish(dish, fromCat, toCat) {
+
+  async function moveDish(item, fromCat, toCat) {
     if (fromCat===toCat) { setMoveTarget(null); return; }
-    const updated = { ...dishes, [fromCat]: dishes[fromCat].filter(d=>d!==dish), [toCat]: [...(dishes[toCat]||[]), dish] };
-    setDishes(updated); saveDishes(updated); setMoveTarget(null);
+    try {
+      await sbFetch(`/dishes?id=eq.${item.id}`, {
+        method: "PATCH",
+        headers: { ...H, "Prefer": "return=minimal" },
+        body: JSON.stringify({ category: toCat })
+      });
+      setDishes(prev => ({
+        ...prev,
+        [fromCat]: prev[fromCat].filter(d=>d.id!==item.id),
+        [toCat]: [...(prev[toCat]||[]), item]
+      }));
+      flash("✓ Verplaatst");
+    } catch(e) { flash("⚠ " + e.message); }
+    setMoveTarget(null);
   }
-  function addCategory() {
+
+  async function addCategory() {
     if (!newCategory.trim() || dishes[newCategory.trim()]) return;
-    const updated = { ...dishes, [newCategory.trim()]: [] };
-    setDishes(updated); saveDishes(updated);
+    setDishes(prev => ({ ...prev, [newCategory.trim()]: [] }));
+    flash("✓ Categorie aangemaakt");
     setNewCategory(""); setShowAddCategory(false);
   }
 
-  // Week menu CRUD
-  function assignDishToDay(dish, dayName) {
-    const updated = { ...weekMenus, [weekKey]: { ...currentWeek, [dayName]: dish } };
-    setWeekMenus(updated); saveWeeks(updated);
-    setDayPicker(null); setShowManualAdd(false); setManualDish("");
+  // ── WEEK MENU CRUD ────────────────────────────────────────────────────────
+  async function assignDishToDay(dish, dayName) {
+    try {
+      const existing = weekMenu[dayName];
+      if (existing) {
+        await sbFetch(`/week_menu?id=eq.${existing.id}`, {
+          method: "PATCH",
+          headers: { ...H, "Prefer": "return=minimal" },
+          body: JSON.stringify({ dish })
+        });
+        setWeekMenu(prev => ({ ...prev, [dayName]: { id: existing.id, dish } }));
+      } else {
+        const [row] = await sbFetch("/week_menu?select=id,day_name,dish", {
+          method: "POST",
+          headers: { ...H, "Prefer": "return=representation" },
+          body: JSON.stringify({ week_key: weekKey, day_name: dayName, dish })
+        });
+        setWeekMenu(prev => ({ ...prev, [dayName]: { id: row.id, dish: row.dish } }));
+      }
+      flash("✓ Ingepland");
+    } catch(e) { flash("⚠ " + e.message); }
+    setDayPicker(null); setShowManualAdd(false); setManualDish(""); setManualDay(null);
   }
-  function removeFromDay(dayName) {
-    const week = { ...currentWeek };
-    delete week[dayName];
-    const updated = { ...weekMenus, [weekKey]: week };
-    setWeekMenus(updated); saveWeeks(updated);
+
+  async function removeFromDay(dayName) {
+    const entry = weekMenu[dayName];
+    if (!entry) return;
+    try {
+      await sbFetch(`/week_menu?id=eq.${entry.id}`, { method: "DELETE" });
+      setWeekMenu(prev => { const n={...prev}; delete n[dayName]; return n; });
+      flash("✓ Verwijderd");
+    } catch(e) { flash("⚠ " + e.message); }
   }
-  function clearWeek() {
-    const updated = { ...weekMenus, [weekKey]: {} };
-    setWeekMenus(updated); saveWeeks(updated);
+
+  async function clearWeek() {
+    try {
+      await sbFetch(`/week_menu?week_key=eq.${weekKey}`, { method: "DELETE" });
+      setWeekMenu({});
+      flash("✓ Week geleegd");
+    } catch(e) { flash("⚠ " + e.message); }
     setShowClearConfirm(false);
   }
-  function saveDishToCategory(dish, cat) {
-    if (!dish || !cat || dishes[cat]?.includes(dish)) { setSaveToCatTarget(null); return; }
-    const updated = { ...dishes, [cat]: [...(dishes[cat]||[]), dish] };
-    setDishes(updated); saveDishes(updated); setSaveToCatTarget(null);
+
+  async function saveDishToCategory(dishName, cat) {
+    const already = dishes[cat]?.some(d=>d.name===dishName);
+    if (already) { setSaveToCatTarget(null); return; }
+    try {
+      const [row] = await sbFetch("/dishes?select=id,category,name", {
+        method: "POST",
+        headers: { ...H, "Prefer": "return=representation" },
+        body: JSON.stringify({ category: cat, name: dishName })
+      });
+      setDishes(prev => ({ ...prev, [cat]: [...(prev[cat]||[]), { id: row.id, name: row.name }] }));
+      flash("✓ Opgeslagen in " + cat);
+    } catch(e) { flash("⚠ " + e.message); }
+    setSaveToCatTarget(null);
   }
 
-  const suggestion = loaded ? getDailySuggestion(dishes) : null;
-  const suggestionCat = suggestion ? Object.entries(dishes).find(([,v])=>v.includes(suggestion))?.[0] : null;
+  // ── DERIVED ───────────────────────────────────────────────────────────────
+  const flatDishes = Object.entries(dishes).flatMap(([cat,items])=>items.map(d=>({...d,cat})));
+  const suggestion = loaded ? getDailySuggestion(
+    Object.fromEntries(Object.entries(dishes).map(([c,items])=>[c,items.map(d=>d.name)]))
+  ) : null;
+  const suggestionCat = suggestion ? Object.entries(dishes).find(([,items])=>items.some(d=>d.name===suggestion))?.[0] : null;
 
   const searchResults = searchQuery.trim()
-    ? Object.entries(dishes).flatMap(([cat,items]) =>
-        items.filter(d=>d.toLowerCase().includes(searchQuery.toLowerCase())).map(dish=>({dish,cat})))
+    ? flatDishes.filter(d=>d.name.toLowerCase().includes(searchQuery.toLowerCase()))
     : [];
 
-  // Date labels for week
   function dayDate(idx) {
-    const d = new Date(monday);
-    d.setDate(d.getDate() + idx);
-    return d.toLocaleDateString("nl-NL", { day:"numeric", month:"short" });
+    const d = new Date(monday); d.setDate(d.getDate()+idx);
+    return d.toLocaleDateString("nl-NL",{day:"numeric",month:"short"});
   }
 
+  // ── STYLES ────────────────────────────────────────────────────────────────
   const css = `
     @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=DM+Sans:wght@300;400;500&display=swap');
     *{box-sizing:border-box;margin:0;padding:0}
     body{background:#faf7f2}
     .app{min-height:100vh;background:#faf7f2;font-family:'DM Sans',sans-serif;color:#1a1a1a;max-width:480px;margin:0 auto;padding-bottom:80px}
-
-    /* HEADER */
     .header{background:#1a1a1a;color:#faf7f2;padding:18px 20px 14px;position:sticky;top:0;z-index:100}
     .header-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
     .logo{font-family:'Playfair Display',serif;font-size:21px;font-weight:900;letter-spacing:-.5px}
     .logo span{color:#e8c547}
-    .save-status{font-size:11px;color:#e8c547;font-weight:500}
+    .save-status{font-size:11px;color:#e8c547;font-weight:500;max-width:160px;text-align:right}
     .nav{display:flex;gap:3px}
     .nav-btn{flex:1;background:transparent;border:1.5px solid rgba(255,255,255,0.14);color:rgba(255,255,255,0.55);padding:7px 2px;border-radius:8px;font-family:'DM Sans',sans-serif;font-size:11.5px;font-weight:500;cursor:pointer;transition:all .2s;line-height:1.3}
     .nav-btn.active{background:#e8c547;border-color:#e8c547;color:#1a1a1a}
 
-    /* HOME */
+    .loading{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 20px;gap:12px;color:#aaa;font-size:14px}
+    .spinner{width:32px;height:32px;border:3px solid #ede9e0;border-top-color:#e8c547;border-radius:50%;animation:spin .8s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+
     .home-section{padding:24px 20px 0}
     .day-label{font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:1.5px;color:#888;margin-bottom:3px}
     .date-title{font-family:'Playfair Display',serif;font-size:26px;font-weight:700;line-height:1.1;margin-bottom:18px}
@@ -224,42 +301,35 @@ export default function App() {
     .add-cat-btn{background:transparent;border:1.5px dashed #ccc;border-radius:12px;padding:14px 13px;cursor:pointer;font-size:12.5px;font-weight:500;color:#aaa;width:100%;display:flex;align-items:center;gap:8px;transition:all .2s;font-family:'DM Sans',sans-serif}
     .add-cat-btn:hover{border-color:#888;color:#555}
 
-    /* WEEK */
     .week-header{padding:20px 20px 0}
-    .week-title-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
-    .week-subtitle{font-size:12px;color:#999;margin-bottom:16px}
-    .week-list{display:flex;flex-direction:column;gap:0;padding:0 20px}
+    .week-subtitle{font-size:12px;color:#999;margin-bottom:16px;margin-top:3px}
+    .week-list{display:flex;flex-direction:column;padding:0 20px}
     .week-day-row{display:flex;align-items:stretch;border-bottom:1px solid #f0ece4;padding:10px 0;gap:12px}
     .week-day-row:last-child{border-bottom:none}
-    .week-day-row.today-row .wday-label{color:#1a1a1a;font-weight:700}
-    .wday-col{width:48px;flex-shrink:0;display:flex;flex-direction:column;padding-top:2px}
+    .wday-col{width:44px;flex-shrink:0;display:flex;flex-direction:column;padding-top:2px}
     .wday-label{font-size:13px;font-weight:500;color:#555;line-height:1}
+    .wday-label.today{color:#1a1a1a;font-weight:700}
     .wday-date{font-size:10.5px;color:#bbb;margin-top:2px}
-    .wday-today-dot{width:6px;height:6px;background:#e8c547;border-radius:50%;margin-top:5px}
-    .week-dish-col{flex:1;display:flex;align-items:center;gap:8px}
+    .wday-dot{width:6px;height:6px;background:#e8c547;border-radius:50%;margin-top:5px}
+    .week-dish-col{flex:1;display:flex;align-items:center}
     .week-dish-filled{background:white;border:1.5px solid #ede9e0;border-radius:10px;padding:9px 12px;flex:1;display:flex;align-items:center;justify-content:space-between;gap:6px}
-    .week-dish-filled.today-dish{border-color:#e8c547;background:#fffdf0}
+    .week-dish-filled.today{border-color:#e8c547;background:#fffdf0}
     .week-dish-name{font-size:13px;font-weight:500;flex:1;line-height:1.3}
-    .week-dish-actions{display:flex;gap:4px;flex-shrink:0}
+    .wday-actions{display:flex;gap:4px;flex-shrink:0}
     .week-empty-slot{flex:1;border:1.5px dashed #ddd;border-radius:10px;padding:9px 12px;display:flex;align-items:center;cursor:pointer;transition:all .15s;color:#ccc;font-size:13px;gap:6px}
     .week-empty-slot:hover{border-color:#aaa;color:#888;background:#faf7f2}
-    .wday-add-btn{width:32px;height:32px;background:none;border:1.5px dashed #ddd;border-radius:8px;cursor:pointer;font-size:16px;color:#ccc;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0}
-    .wday-add-btn:hover{border-color:#888;color:#555}
     .week-actions-row{display:flex;gap:8px;padding:16px 20px 0}
     .week-clear-btn{background:none;border:1.5px solid #f0ede8;border-radius:10px;padding:10px 16px;font-family:'DM Sans',sans-serif;font-size:13px;color:#bbb;cursor:pointer;transition:all .15s;display:flex;align-items:center;gap:6px}
     .week-clear-btn:hover{border-color:#e04;color:#e04;background:#fff5f5}
-    .week-manual-btn{background:#1a1a1a;border:none;border-radius:10px;padding:10px 16px;font-family:'DM Sans',sans-serif;font-size:13px;color:white;cursor:pointer;display:flex;align-items:center;gap:6px}
-    .week-manual-btn:hover{background:#333}
 
-    /* DAY PICKER MODAL */
     .day-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:4px}
     .day-opt{padding:10px 4px;border:1.5px solid #ede9e0;border-radius:10px;background:white;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:500;text-align:center;transition:all .15s;line-height:1.2}
     .day-opt:hover{border-color:#1a1a1a;background:#faf7f2}
-    .day-opt.has-dish{background:#faf7f2;border-color:#ddd;color:#aaa}
     .day-opt.today-opt{border-color:#e8c547}
+    .day-opt.has-dish{background:#faf7f2;border-color:#ddd;color:#aaa}
     .day-opt-date{font-size:10px;color:#aaa;font-weight:400;margin-top:2px}
+    .day-opt-occupied{font-size:9px;color:#e8c547;margin-top:1px}
 
-    /* SEARCH */
     .search-wrap{padding:14px 20px 0;position:relative}
     .search-icon{position:absolute;left:34px;top:26px;font-size:14px;color:#aaa;pointer-events:none}
     .search-input{width:100%;border:1.5px solid #ede9e0;border-radius:12px;padding:11px 38px 11px 36px;font-family:'DM Sans',sans-serif;font-size:14px;background:white;outline:none;transition:border-color .2s}
@@ -277,7 +347,6 @@ export default function App() {
     .icon-btn:hover{background:#ede9e0}
     .icon-btn.danger:hover{background:#ffe5e5}
 
-    /* CATEGORY */
     .cat-header{padding:20px 20px 0}
     .back-btn{background:none;border:none;font-family:'DM Sans',sans-serif;font-size:13px;color:#888;cursor:pointer;padding:0;margin-bottom:10px;display:flex;align-items:center;gap:4px}
     .cat-title{font-family:'Playfair Display',serif;font-size:24px;font-weight:700;display:flex;align-items:center;gap:10px}
@@ -286,12 +355,11 @@ export default function App() {
     .dish-item:hover{border-color:#bbb}
     .dish-item>span{flex:1}
     .dish-actions{display:flex;gap:3px;flex-shrink:0}
-    .move-btn{background:none;border:none;font-size:14px;cursor:pointer;color:#bbb;padding:0;transition:color .15s;width:26px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:6px}
+    .move-btn{background:none;border:none;font-size:14px;cursor:pointer;color:#bbb;padding:0;width:26px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:6px;transition:all .15s}
     .move-btn:hover{color:#555;background:#f0ece4}
-    .remove-btn{background:none;border:none;color:#ccc;font-size:17px;cursor:pointer;padding:0;line-height:1;transition:color .15s;width:26px;height:26px;display:flex;align-items:center;justify-content:center}
+    .remove-btn{background:none;border:none;color:#ccc;font-size:17px;cursor:pointer;padding:0;width:26px;height:26px;display:flex;align-items:center;justify-content:center;transition:color .15s}
     .remove-btn:hover{color:#e05}
 
-    /* FORMS */
     .add-form{padding:0 20px;display:flex;gap:8px;margin-top:4px}
     .add-input{flex:1;border:1.5px solid #ede9e0;border-radius:10px;padding:11px 13px;font-family:'DM Sans',sans-serif;font-size:13.5px;background:white;outline:none;transition:border-color .2s}
     .add-input:focus{border-color:#1a1a1a}
@@ -300,24 +368,23 @@ export default function App() {
     .add-trigger{background:none;border:1.5px dashed #ccc;border-radius:10px;padding:11px 13px;width:calc(100% - 40px);margin:7px 20px 0;display:flex;align-items:center;gap:8px;font-family:'DM Sans',sans-serif;font-size:13.5px;color:#aaa;cursor:pointer;transition:all .2s}
     .add-trigger:hover{border-color:#888;color:#555}
 
-    /* MODALS */
     .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;z-index:200}
     .modal{background:white;border-radius:20px 20px 0 0;padding:26px 20px 38px;width:100%;max-height:88vh;overflow-y:auto}
     .modal-title{font-family:'Playfair Display',serif;font-size:19px;font-weight:700;margin-bottom:4px}
     .modal-sub{font-size:12.5px;color:#888;margin-bottom:16px}
     .modal-form{display:flex;gap:8px}
-    .move-list{display:flex;flex-direction:column;gap:7px;max-height:320px;overflow-y:auto}
-    .move-option{display:flex;align-items:center;gap:10px;padding:12px 13px;border:1.5px solid #ede9e0;border-radius:10px;background:white;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:13.5px;transition:all .15s;text-align:left;width:100%}
-    .move-option:hover{border-color:#1a1a1a;background:#faf7f2}
-    .move-option.current{opacity:.38;cursor:default;pointer-events:none;background:#f5f5f5}
+    .modal-section-label{font-size:11px;font-weight:600;color:#aaa;text-transform:uppercase;letter-spacing:1px;margin-bottom:9px}
 
-    /* CAT SELECT */
-    .cat-select-list{display:flex;flex-direction:column;gap:7px;max-height:300px;overflow-y:auto}
-    .cat-select-opt{display:flex;align-items:center;gap:10px;padding:12px 13px;border:1.5px solid #ede9e0;border-radius:10px;background:white;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:13.5px;transition:all .15s;text-align:left;width:100%}
-    .cat-select-opt:hover{border-color:#1a1a1a;background:#faf7f2}
-    .cat-select-opt.already{opacity:.38;cursor:default;pointer-events:none}
+    .scroll-chips{display:flex;gap:6px;overflow-x:auto;padding-bottom:8px;margin-bottom:16px}
+    .scroll-chips::-webkit-scrollbar{display:none}
+    .chip{background:white;border:1.5px solid #ede9e0;border-radius:8px;padding:7px 11px;white-space:nowrap;font-family:'DM Sans',sans-serif;font-size:12.5px;cursor:pointer;flex-shrink:0;transition:all .15s}
+    .chip:hover{border-color:#1a1a1a;background:#faf7f2}
 
-    /* CONFIRM */
+    .list-scroll{display:flex;flex-direction:column;gap:7px;max-height:300px;overflow-y:auto}
+    .list-opt{display:flex;align-items:center;gap:10px;padding:12px 13px;border:1.5px solid #ede9e0;border-radius:10px;background:white;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:13.5px;transition:all .15s;text-align:left;width:100%}
+    .list-opt:hover{border-color:#1a1a1a;background:#faf7f2}
+    .list-opt.muted{opacity:.38;cursor:default;pointer-events:none;background:#f5f5f5}
+
     .confirm-btns{display:flex;gap:10px;margin-top:16px}
     .btn-danger{background:#e04040;color:white;border:none;border-radius:10px;padding:12px 20px;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:500;cursor:pointer;flex:1}
     .btn-cancel{background:#f5f1ea;color:#555;border:none;border-radius:10px;padding:12px 20px;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:500;cursor:pointer;flex:1}
@@ -326,15 +393,31 @@ export default function App() {
     .no-results{text-align:center;color:#bbb;padding:44px 20px 20px;font-size:13.5px}
   `;
 
+  if (!loaded) return (
+    <>
+      <style>{css}</style>
+      <div className="app">
+        <div className="header">
+          <div className="header-top"><div className="logo">Avond<span>Eten</span></div></div>
+        </div>
+        <div className="loading">
+          <div className="spinner"/>
+          <div>Verbinding maken met database...</div>
+        </div>
+      </div>
+    </>
+  );
+
   return (
     <>
       <style>{css}</style>
       <div className="app">
+
         {/* HEADER */}
         <div className="header">
           <div className="header-top">
             <div className="logo">Avond<span>Eten</span></div>
-            <div className="save-status">{saveStatus}</div>
+            <div className="save-status">{status}</div>
           </div>
           <div className="nav">
             {[["home","🏠","Vandaag"],["week","📅","Week"],["browse","📋","Bladeren"],["search","🔍","Zoeken"]].map(([v,icon,label])=>(
@@ -347,168 +430,154 @@ export default function App() {
         </div>
 
         {/* ── VANDAAG ── */}
-        {view==="home" && (
-          <>
-            <div className="home-section">
-              <div className="day-label">{DAYS_NL_SUN[today.getDay()]} · {today.toLocaleDateString("nl-NL",{day:"numeric",month:"long"})}</div>
-              <div className="date-title">Wat eten we vanavond?</div>
-              {currentWeek[todayDayName] ? (
-                <div className="suggestion-card" style={{cursor:"default"}}>
-                  <div className="suggestion-label">📅 Gepland voor vandaag</div>
-                  <div className="suggestion-name">{currentWeek[todayDayName]}</div>
-                  <div className="suggestion-cat"><span>✓</span><span>Staat in het weekmenu</span></div>
-                </div>
-              ) : suggestion ? (
-                <div className="suggestion-card" onClick={()=>setDayPicker({dish:suggestion,source:"catalog"})}>
-                  <div className="suggestion-label">✦ Suggestie van de dag</div>
-                  <div className="suggestion-name">{suggestion}</div>
-                  <div className="suggestion-cat"><span>{CAT_ICONS[suggestionCat]||"🍽"}</span><span>{suggestionCat}</span></div>
-                  <div className="suggestion-hint"><span>📅</span><span>Tik om in te plannen</span></div>
-                </div>
-              ) : (
-                <div className="suggestion-card" style={{cursor:"default"}}><div className="suggestion-name">Voeg gerechten toe!</div></div>
-              )}
-            </div>
-            <div className="section-title">Categorieën</div>
-            <div className="category-grid">
-              {Object.entries(dishes).map(([cat,items])=>(
-                <button key={cat} className="cat-card" onClick={()=>{setActiveCategory(cat);setView("category");}}>
-                  <span className="cat-icon">{CAT_ICONS[cat]||"🍽"}</span>
-                  <div className="cat-name">{cat}</div>
-                  <div className="cat-count">{items.length} gerechten</div>
-                </button>
-              ))}
-            </div>
-          </>
-        )}
-
-        {/* ── WEEK ── */}
-        {view==="week" && (
-          <>
-            <div className="week-header">
-              <div className="week-title-row">
-                <div style={{fontFamily:"'Playfair Display',serif",fontSize:24,fontWeight:700}}>Week {getWeekKey(today).split("-W")[1]}</div>
+        {view==="home" && <>
+          <div className="home-section">
+            <div className="day-label">{DAYS_NL_SUN[today.getDay()]} · {today.toLocaleDateString("nl-NL",{day:"numeric",month:"long"})}</div>
+            <div className="date-title">Wat eten we vanavond?</div>
+            {weekMenu[todayDayName] ? (
+              <div className="suggestion-card" style={{cursor:"default"}}>
+                <div className="suggestion-label">📅 Gepland voor vandaag</div>
+                <div className="suggestion-name">{weekMenu[todayDayName].dish}</div>
+                <div className="suggestion-cat"><span>✓</span><span>Staat in het weekmenu</span></div>
               </div>
-              <div className="week-subtitle">{monday.toLocaleDateString("nl-NL",{day:"numeric",month:"long"})} – {new Date(monday.getTime()+6*86400000).toLocaleDateString("nl-NL",{day:"numeric",month:"long"})}</div>
-            </div>
-            <div className="week-list">
-              {WEEK_DAYS.map((day, idx) => {
-                const isToday = idx === todayWeekIdx;
-                const hasDish = !!currentWeek[day];
-                return (
-                  <div key={day} className={`week-day-row ${isToday?"today-row":""}`}>
-                    <div className="wday-col">
-                      <div className="wday-label">{WEEK_DAYS_SHORT[idx]}</div>
-                      <div className="wday-date">{dayDate(idx)}</div>
-                      {isToday && <div className="wday-today-dot"/>}
-                    </div>
-                    <div className="week-dish-col">
-                      {hasDish ? (
-                        <div className={`week-dish-filled ${isToday?"today-dish":""}`}>
-                          <div className="week-dish-name">{currentWeek[day]}</div>
-                          <div className="week-dish-actions">
-                            <button className="icon-btn" title="Opslaan in categorie" onClick={()=>setSaveToCatTarget(currentWeek[day])}>💾</button>
-                            <button className="icon-btn danger" title="Verwijder" onClick={()=>removeFromDay(day)}>×</button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="week-empty-slot" onClick={()=>setShowManualAdd(day)}>
-                          <span>＋</span><span>Gerecht toevoegen</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="week-actions-row">
-              <button className="week-clear-btn" onClick={()=>setShowClearConfirm(true)}>
-                🗑 Hele week legen
-              </button>
-            </div>
-          </>
-        )}
-
-        {/* ── BLADEREN ── */}
-        {view==="browse" && (
-          <>
-            <div className="section-title" style={{marginTop:18}}>Alle categorieën</div>
-            <div className="category-grid">
-              {Object.entries(dishes).map(([cat,items])=>(
-                <button key={cat} className="cat-card" onClick={()=>{setActiveCategory(cat);setView("category");}}>
-                  <span className="cat-icon">{CAT_ICONS[cat]||"🍽"}</span>
-                  <div className="cat-name">{cat}</div>
-                  <div className="cat-count">{items.length} gerechten</div>
-                </button>
-              ))}
-              <button className="add-cat-btn" onClick={()=>setShowAddCategory(true)}>
-                <span>＋</span>Nieuwe categorie
-              </button>
-            </div>
-          </>
-        )}
-
-        {/* ── CATEGORIE DETAIL ── */}
-        {view==="category" && activeCategory && (
-          <>
-            <div className="cat-header">
-              <button className="back-btn" onClick={()=>setView("browse")}>← Terug</button>
-              <div className="cat-title"><span>{CAT_ICONS[activeCategory]||"🍽"}</span><span>{activeCategory}</span></div>
-            </div>
-            <div className="dish-list">
-              {dishes[activeCategory]?.length===0 && <div className="empty">Nog geen gerechten</div>}
-              {dishes[activeCategory]?.map((dish,i)=>(
-                <div key={i} className="dish-item" onClick={()=>setDayPicker({dish,source:"catalog"})}>
-                  <span>{dish}</span>
-                  <div className="dish-actions" onClick={e=>e.stopPropagation()}>
-                    <button className="move-btn" title="Verplaats" onClick={()=>setMoveTarget({dish,fromCat:activeCategory})}>↗</button>
-                    <button className="remove-btn" onClick={()=>removeDish(activeCategory,dish)}>×</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-            {addingTo===activeCategory ? (
-              <div className="add-form">
-                <input className="add-input" placeholder="Naam gerecht..." value={newDish} onChange={e=>setNewDish(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addDish()} autoFocus/>
-                <button className="add-submit" onClick={addDish}>Toevoegen</button>
+            ) : suggestion ? (
+              <div className="suggestion-card" onClick={()=>setDayPicker({dish:suggestion})}>
+                <div className="suggestion-label">✦ Suggestie van de dag</div>
+                <div className="suggestion-name">{suggestion}</div>
+                <div className="suggestion-cat"><span>{CAT_ICONS[suggestionCat]||"🍽"}</span><span>{suggestionCat}</span></div>
+                <div className="suggestion-hint"><span>📅</span><span>Tik om in te plannen</span></div>
               </div>
             ) : (
-              <button className="add-trigger" onClick={()=>setAddingTo(activeCategory)}>＋ Gerecht toevoegen</button>
+              <div className="suggestion-card" style={{cursor:"default"}}><div className="suggestion-name">Voeg gerechten toe!</div></div>
             )}
-          </>
-        )}
+          </div>
+          <div className="section-title">Categorieën</div>
+          <div className="category-grid">
+            {Object.entries(dishes).map(([cat,items])=>(
+              <button key={cat} className="cat-card" onClick={()=>{setActiveCategory(cat);setView("category");}}>
+                <span className="cat-icon">{CAT_ICONS[cat]||"🍽"}</span>
+                <div className="cat-name">{cat}</div>
+                <div className="cat-count">{items.length} gerechten</div>
+              </button>
+            ))}
+          </div>
+        </>}
+
+        {/* ── WEEK ── */}
+        {view==="week" && <>
+          <div className="week-header">
+            <div style={{fontFamily:"'Playfair Display',serif",fontSize:24,fontWeight:700}}>Week {weekKey.split("-W")[1]}</div>
+            <div className="week-subtitle">
+              {monday.toLocaleDateString("nl-NL",{day:"numeric",month:"long"})} – {new Date(monday.getTime()+6*86400000).toLocaleDateString("nl-NL",{day:"numeric",month:"long"})}
+            </div>
+          </div>
+          <div className="week-list">
+            {WEEK_DAYS.map((day,idx)=>{
+              const isToday = idx===todayWeekIdx;
+              const entry = weekMenu[day];
+              return (
+                <div key={day} className="week-day-row">
+                  <div className="wday-col">
+                    <div className={`wday-label ${isToday?"today":""}`}>{WEEK_DAYS_SHORT[idx]}</div>
+                    <div className="wday-date">{dayDate(idx)}</div>
+                    {isToday && <div className="wday-dot"/>}
+                  </div>
+                  <div className="week-dish-col">
+                    {entry ? (
+                      <div className={`week-dish-filled ${isToday?"today":""}`}>
+                        <div className="week-dish-name">{entry.dish}</div>
+                        <div className="wday-actions">
+                          <button className="icon-btn" title="Opslaan in catalogus" onClick={()=>setSaveToCatTarget(entry.dish)}>💾</button>
+                          <button className="icon-btn danger" title="Verwijder" onClick={()=>removeFromDay(day)}>×</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="week-empty-slot" onClick={()=>{setManualDay(day);setShowManualAdd(true);}}>
+                        <span>＋</span><span>Gerecht toevoegen</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="week-actions-row">
+            <button className="week-clear-btn" onClick={()=>setShowClearConfirm(true)}>🗑 Hele week legen</button>
+          </div>
+        </>}
+
+        {/* ── BLADEREN ── */}
+        {view==="browse" && <>
+          <div className="section-title" style={{marginTop:18}}>Alle categorieën</div>
+          <div className="category-grid">
+            {Object.entries(dishes).map(([cat,items])=>(
+              <button key={cat} className="cat-card" onClick={()=>{setActiveCategory(cat);setView("category");}}>
+                <span className="cat-icon">{CAT_ICONS[cat]||"🍽"}</span>
+                <div className="cat-name">{cat}</div>
+                <div className="cat-count">{items.length} gerechten</div>
+              </button>
+            ))}
+            <button className="add-cat-btn" onClick={()=>setShowAddCategory(true)}>
+              <span>＋</span>Nieuwe categorie
+            </button>
+          </div>
+        </>}
+
+        {/* ── CATEGORIE DETAIL ── */}
+        {view==="category" && activeCategory && <>
+          <div className="cat-header">
+            <button className="back-btn" onClick={()=>setView("browse")}>← Terug</button>
+            <div className="cat-title"><span>{CAT_ICONS[activeCategory]||"🍽"}</span><span>{activeCategory}</span></div>
+          </div>
+          <div className="dish-list">
+            {!dishes[activeCategory]?.length && <div className="empty">Nog geen gerechten</div>}
+            {dishes[activeCategory]?.map(item=>(
+              <div key={item.id} className="dish-item" onClick={()=>setDayPicker({dish:item.name})}>
+                <span>{item.name}</span>
+                <div className="dish-actions" onClick={e=>e.stopPropagation()}>
+                  <button className="move-btn" onClick={()=>setMoveTarget({item,fromCat:activeCategory})}>↗</button>
+                  <button className="remove-btn" onClick={()=>removeDish(activeCategory,item.id)}>×</button>
+                </div>
+              </div>
+            ))}
+          </div>
+          {addingTo===activeCategory ? (
+            <div className="add-form">
+              <input className="add-input" placeholder="Naam gerecht..." value={newDish} onChange={e=>setNewDish(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addDish()} autoFocus/>
+              <button className="add-submit" onClick={addDish}>Toevoegen</button>
+            </div>
+          ) : (
+            <button className="add-trigger" onClick={()=>setAddingTo(activeCategory)}>＋ Gerecht toevoegen</button>
+          )}
+        </>}
 
         {/* ── ZOEKEN ── */}
-        {view==="search" && (
-          <>
-            <div className="search-wrap">
-              <span className="search-icon">🔍</span>
-              <input ref={searchRef} className="search-input" placeholder="Zoek een gerecht..." value={searchQuery} onChange={e=>setSearchQuery(e.target.value)}/>
-              {searchQuery && <button className="search-clear" onClick={()=>setSearchQuery("")}>×</button>}
-            </div>
-            <div className="search-results">
-              {!searchQuery.trim() && <div className="no-results">Typ om te zoeken in alle gerechten</div>}
-              {searchQuery.trim() && !searchResults.length && <div className="no-results">Geen gerechten gevonden voor "<strong>{searchQuery}</strong>"</div>}
-              {searchResults.length>0 && (
-                <>
-                  <div className="search-meta">{searchResults.length} gerecht{searchResults.length!==1?"en":""} gevonden</div>
-                  {searchResults.map(({dish,cat},i)=>(
-                    <div key={i} className="search-item" onClick={()=>setDayPicker({dish,source:"catalog"})}>
-                      <div className="search-item-left">
-                        <div className="search-dish"><Highlight text={dish} query={searchQuery}/></div>
-                        <div className="search-cat-badge"><span>{CAT_ICONS[cat]||"🍽"}</span><span>{cat}</span></div>
-                      </div>
-                      <div className="search-actions" onClick={e=>e.stopPropagation()}>
-                        <button className="icon-btn" title="Verplaats" onClick={()=>setMoveTarget({dish,fromCat:cat})}>↗️</button>
-                        <button className="icon-btn danger" title="Verwijder" onClick={()=>removeDish(cat,dish)}>🗑</button>
-                      </div>
-                    </div>
-                  ))}
-                </>
-              )}
-            </div>
-          </>
-        )}
+        {view==="search" && <>
+          <div className="search-wrap">
+            <span className="search-icon">🔍</span>
+            <input ref={searchRef} className="search-input" placeholder="Zoek een gerecht..." value={searchQuery} onChange={e=>setSearchQuery(e.target.value)}/>
+            {searchQuery && <button className="search-clear" onClick={()=>setSearchQuery("")}>×</button>}
+          </div>
+          <div className="search-results">
+            {!searchQuery.trim() && <div className="no-results">Typ om te zoeken in alle gerechten</div>}
+            {searchQuery.trim() && !searchResults.length && <div className="no-results">Geen resultaten voor "<strong>{searchQuery}</strong>"</div>}
+            {searchResults.length>0 && <>
+              <div className="search-meta">{searchResults.length} gerecht{searchResults.length!==1?"en":""} gevonden</div>
+              {searchResults.map(item=>(
+                <div key={item.id} className="search-item" onClick={()=>setDayPicker({dish:item.name})}>
+                  <div className="search-item-left">
+                    <div className="search-dish"><Highlight text={item.name} query={searchQuery}/></div>
+                    <div className="search-cat-badge"><span>{CAT_ICONS[item.cat]||"🍽"}</span><span>{item.cat}</span></div>
+                  </div>
+                  <div className="search-actions" onClick={e=>e.stopPropagation()}>
+                    <button className="icon-btn" onClick={()=>setMoveTarget({item,fromCat:item.cat})}>↗️</button>
+                    <button className="icon-btn danger" onClick={()=>removeDish(item.cat,item.id)}>🗑</button>
+                  </div>
+                </div>
+              ))}
+            </>}
+          </div>
+        </>}
 
         {/* ── DAY PICKER MODAL ── */}
         {dayPicker && (
@@ -519,13 +588,13 @@ export default function App() {
               <div className="day-grid">
                 {WEEK_DAYS.map((day,idx)=>{
                   const isToday = idx===todayWeekIdx;
-                  const hasDish = !!currentWeek[day];
+                  const hasDish = !!weekMenu[day];
                   return (
                     <button key={day} className={`day-opt ${hasDish?"has-dish":""} ${isToday?"today-opt":""}`}
-                      onClick={()=>assignDishToDay(dayPicker.dish, day)}>
+                      onClick={()=>assignDishToDay(dayPicker.dish,day)}>
                       {WEEK_DAYS_SHORT[idx]}
                       <div className="day-opt-date">{dayDate(idx)}</div>
-                      {hasDish && <div style={{fontSize:9,color:"#e8c547",marginTop:1}}>bezet</div>}
+                      {hasDish && <div className="day-opt-occupied">bezet</div>}
                     </button>
                   );
                 })}
@@ -534,29 +603,23 @@ export default function App() {
           </div>
         )}
 
-        {/* ── MANUAL ADD TO WEEK MODAL ── */}
-        {showManualAdd && (
-          <div className="modal-overlay" onClick={()=>setShowManualAdd(false)}>
+        {/* ── MANUAL ADD MODAL ── */}
+        {showManualAdd && manualDay && (
+          <div className="modal-overlay" onClick={()=>{setShowManualAdd(false);setManualDay(null);}}>
             <div className="modal" onClick={e=>e.stopPropagation()}>
               <div className="modal-title">Gerecht toevoegen</div>
-              <div className="modal-sub">{showManualAdd}</div>
-              {/* Quick pick from catalog */}
-              <div style={{fontFamily:"'DM Sans',sans-serif",fontSize:12,fontWeight:500,color:"#aaa",textTransform:"uppercase",letterSpacing:"1px",marginBottom:10}}>Uit catalogus</div>
-              <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:8,marginBottom:14}}>
-                {Object.entries(dishes).map(([cat,items])=>
-                  items.slice(0,999).map(dish=>(
-                    <button key={cat+dish} onClick={()=>{setShowManualAdd(false);assignDishToDay(dish,showManualAdd);}}
-                      style={{background:"white",border:"1.5px solid #ede9e0",borderRadius:8,padding:"7px 11px",whiteSpace:"nowrap",fontFamily:"'DM Sans',sans-serif",fontSize:12.5,cursor:"pointer",flexShrink:0}}>
-                      {dish}
-                    </button>
-                  ))
-                )}
+              <div className="modal-sub">{manualDay}</div>
+              <div className="modal-section-label">Uit catalogus</div>
+              <div className="scroll-chips">
+                {flatDishes.map(item=>(
+                  <button key={item.id} className="chip" onClick={()=>assignDishToDay(item.name,manualDay)}>{item.name}</button>
+                ))}
               </div>
-              <div style={{fontFamily:"'DM Sans',sans-serif",fontSize:12,fontWeight:500,color:"#aaa",textTransform:"uppercase",letterSpacing:"1px",marginBottom:10}}>Of typ zelf</div>
+              <div className="modal-section-label">Of typ zelf</div>
               <div className="modal-form">
                 <input className="add-input" placeholder="Naam gerecht..." value={manualDish} onChange={e=>setManualDish(e.target.value)}
-                  onKeyDown={e=>{if(e.key==="Enter"&&manualDish.trim()){assignDishToDay(manualDish.trim(),showManualAdd);}}} autoFocus/>
-                <button className="add-submit" onClick={()=>{if(manualDish.trim())assignDishToDay(manualDish.trim(),showManualAdd);}}>Toevoegen</button>
+                  onKeyDown={e=>e.key==="Enter"&&manualDish.trim()&&assignDishToDay(manualDish.trim(),manualDay)} autoFocus/>
+                <button className="add-submit" onClick={()=>manualDish.trim()&&assignDishToDay(manualDish.trim(),manualDay)}>Toevoegen</button>
               </div>
             </div>
           </div>
@@ -566,13 +629,13 @@ export default function App() {
         {saveToCatTarget && (
           <div className="modal-overlay" onClick={()=>setSaveToCatTarget(null)}>
             <div className="modal" onClick={e=>e.stopPropagation()}>
-              <div className="modal-title">Opslaan in categorie</div>
+              <div className="modal-title">Opslaan in catalogus</div>
               <div className="modal-sub">"{saveToCatTarget}"</div>
-              <div className="cat-select-list">
+              <div className="list-scroll">
                 {Object.entries(dishes).map(([cat,items])=>{
-                  const already = items.includes(saveToCatTarget);
+                  const already = items.some(d=>d.name===saveToCatTarget);
                   return (
-                    <button key={cat} className={`cat-select-opt ${already?"already":""}`} onClick={()=>saveDishToCategory(saveToCatTarget,cat)}>
+                    <button key={cat} className={`list-opt ${already?"muted":""}`} onClick={()=>saveDishToCategory(saveToCatTarget,cat)}>
                       <span style={{fontSize:18}}>{CAT_ICONS[cat]||"🍽"}</span>
                       <span style={{flex:1}}>{cat}</span>
                       {already && <span style={{fontSize:11,color:"#bbb"}}>al aanwezig</span>}
@@ -589,10 +652,10 @@ export default function App() {
           <div className="modal-overlay" onClick={()=>setMoveTarget(null)}>
             <div className="modal" onClick={e=>e.stopPropagation()}>
               <div className="modal-title">Verplaats gerecht</div>
-              <div className="modal-sub">"{moveTarget.dish}"</div>
-              <div className="move-list">
+              <div className="modal-sub">"{moveTarget.item.name}"</div>
+              <div className="list-scroll">
                 {Object.keys(dishes).map(cat=>(
-                  <button key={cat} className={`move-option ${cat===moveTarget.fromCat?"current":""}`} onClick={()=>moveDish(moveTarget.dish,moveTarget.fromCat,cat)}>
+                  <button key={cat} className={`list-opt ${cat===moveTarget.fromCat?"muted":""}`} onClick={()=>moveDish(moveTarget.item,moveTarget.fromCat,cat)}>
                     <span style={{fontSize:18}}>{CAT_ICONS[cat]||"🍽"}</span>
                     <span style={{flex:1}}>{cat}</span>
                     {cat===moveTarget.fromCat && <span style={{fontSize:11,color:"#bbb"}}>huidig</span>}
@@ -629,6 +692,7 @@ export default function App() {
             </div>
           </div>
         )}
+
       </div>
     </>
   );
