@@ -112,9 +112,10 @@ export default function App() {
   const [showAddCategory, setShowAddCategory] = useState(false);
   const [moveTarget, setMoveTarget]   = useState(null);
 
-  const [dayPicker, setDayPicker]     = useState(null);
+  const [dayPicker, setDayPicker]     = useState(null); // { dish, slot }
   const [showManualAdd, setShowManualAdd] = useState(false);
   const [manualDay, setManualDay]     = useState(null);
+  const [manualSlot, setManualSlot]   = useState("main"); // "main" | "kids"
   const [manualDish, setManualDish]   = useState("");
   const [saveToCatTarget, setSaveToCatTarget] = useState(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -152,9 +153,9 @@ export default function App() {
   }, []);
 
   const loadWeekMenu = useCallback(async () => {
-    const rows = await sbFetch(`/week_menu?select=id,day_name,dish&week_key=eq.${weekKey}`);
+    const rows = await sbFetch(`/week_menu?select=id,day_name,dish,kids_dish&week_key=eq.${weekKey}`);
     const mapped = {};
-    for (const row of rows) mapped[row.day_name] = { id: row.id, dish: row.dish };
+    for (const row of rows) mapped[row.day_name] = { id: row.id, dish: row.dish, kids_dish: row.kids_dish || null };
     setWeekMenu(mapped);
   }, [weekKey]);
 
@@ -274,33 +275,53 @@ export default function App() {
   }
 
   // ── WEEK MENU CRUD ────────────────────────────────────────────────────────
-  async function assignDishToDay(dish, dayName) {
+  async function assignDishToDay(dish, dayName, slot = "main") {
     try {
       const existing = weekMenu[dayName];
+      const field = slot === "kids" ? "kids_dish" : "dish";
       if (existing) {
         await sbFetch(`/week_menu?id=eq.${existing.id}`, {
           method: "PATCH", headers: { ...H, "Prefer": "return=minimal" },
-          body: JSON.stringify({ dish })
+          body: JSON.stringify({ [field]: dish })
         });
-        setWeekMenu(prev => ({ ...prev, [dayName]: { id: existing.id, dish } }));
+        setWeekMenu(prev => ({ ...prev, [dayName]: { ...prev[dayName], [field]: dish } }));
       } else {
-        const [row] = await sbFetch("/week_menu?select=id,day_name,dish", {
+        const [row] = await sbFetch("/week_menu?select=id,day_name,dish,kids_dish", {
           method: "POST", headers: { ...H, "Prefer": "return=representation" },
-          body: JSON.stringify({ week_key: weekKey, day_name: dayName, dish })
+          body: JSON.stringify({ week_key: weekKey, day_name: dayName, [field]: dish })
         });
-        setWeekMenu(prev => ({ ...prev, [dayName]: { id: row.id, dish: row.dish } }));
+        setWeekMenu(prev => ({ ...prev, [dayName]: { id: row.id, dish: row.dish, kids_dish: row.kids_dish || null } }));
       }
       flash("✓ Ingepland");
     } catch(e) { flash("⚠ " + e.message); }
     setDayPicker(null); setShowManualAdd(false); setManualDish(""); setManualDay(null);
   }
 
-  async function removeFromDay(dayName) {
+  async function removeFromDay(dayName, slot = "main") {
     const entry = weekMenu[dayName];
     if (!entry) return;
     try {
-      await sbFetch(`/week_menu?id=eq.${entry.id}`, { method: "DELETE" });
-      setWeekMenu(prev => { const n={...prev}; delete n[dayName]; return n; });
+      if (slot === "kids") {
+        // Just clear kids_dish, keep main dish
+        await sbFetch(`/week_menu?id=eq.${entry.id}`, {
+          method: "PATCH", headers: { ...H, "Prefer": "return=minimal" },
+          body: JSON.stringify({ kids_dish: null })
+        });
+        setWeekMenu(prev => ({ ...prev, [dayName]: { ...prev[dayName], kids_dish: null } }));
+      } else {
+        // If no kids dish either, delete the whole row
+        if (!entry.kids_dish) {
+          await sbFetch(`/week_menu?id=eq.${entry.id}`, { method: "DELETE" });
+          setWeekMenu(prev => { const n={...prev}; delete n[dayName]; return n; });
+        } else {
+          // Keep row but clear main dish
+          await sbFetch(`/week_menu?id=eq.${entry.id}`, {
+            method: "PATCH", headers: { ...H, "Prefer": "return=minimal" },
+            body: JSON.stringify({ dish: null })
+          });
+          setWeekMenu(prev => ({ ...prev, [dayName]: { ...prev[dayName], dish: null } }));
+        }
+      }
       flash("✓ Verwijderd");
     } catch(e) { flash("⚠ " + e.message); }
   }
@@ -343,7 +364,7 @@ export default function App() {
   // ─── DISH ITEM component – used in category & search ──────────────────────
   function DishItem({ item, cat, onPlan, onMove, onRemove }) {
     return (
-      <div className="dish-item" onClick={onPlan}>
+      <div className="dish-item" onClick={()=>onPlan("main")}>
         <span className="dish-name">{item.name}</span>
         <div className="dish-actions" onClick={e=>e.stopPropagation()}>
           {item.recipe_url ? (
@@ -414,10 +435,15 @@ export default function App() {
     .wday-label.today{color:#1a1a1a;font-weight:700}
     .wday-date{font-size:10.5px;color:#bbb;margin-top:2px}
     .wday-dot{width:6px;height:6px;background:#e8c547;border-radius:50%;margin-top:5px}
-    .week-dish-col{flex:1;display:flex;align-items:center}
-    .week-dish-filled{background:white;border:1.5px solid #ede9e0;border-radius:10px;padding:9px 12px;flex:1;display:flex;align-items:center;justify-content:space-between;gap:6px}
+    .week-dish-col{flex:1;display:flex;flex-direction:column;gap:5px}
+    .week-dish-filled{background:white;border:1.5px solid #ede9e0;border-radius:10px;padding:9px 12px;display:flex;align-items:center;justify-content:space-between;gap:6px}
     .week-dish-filled.today{border-color:#e8c547;background:#fffdf0}
+    .week-dish-filled.kids{border-color:#c8e6c9;background:#f9fef9}
     .week-dish-name{font-size:13px;font-weight:500;flex:1;line-height:1.3}
+    .week-dish-label{font-size:9.5px;font-weight:600;text-transform:uppercase;letter-spacing:.8px;color:#aaa;margin-bottom:1px}
+    .week-dish-label.kids{color:#81c784}
+    .week-add-kids{display:flex;align-items:center;gap:5px;padding:5px 0 2px;cursor:pointer;font-size:11.5px;color:#bbb;transition:color .15s;background:none;border:none;font-family:'DM Sans',sans-serif}
+    .week-add-kids:hover{color:#81c784}
     .wday-actions{display:flex;gap:4px;flex-shrink:0}
     .week-empty-slot{flex:1;border:1.5px dashed #ddd;border-radius:10px;padding:9px 12px;display:flex;align-items:center;cursor:pointer;transition:all .15s;color:#ccc;font-size:13px;gap:6px}
     .week-empty-slot:hover{border-color:#aaa;color:#888;background:#faf7f2}
@@ -521,6 +547,15 @@ export default function App() {
 
     .empty{text-align:center;color:#bbb;padding:36px 20px;font-size:13.5px}
     .no-results{text-align:center;color:#bbb;padding:44px 20px 20px;font-size:13.5px}
+
+    .autocomplete-list{display:flex;flex-direction:column;gap:5px;margin-bottom:8px;max-height:260px;overflow-y:auto}
+    .autocomplete-item{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:11px 13px;border:1.5px solid #ede9e0;border-radius:10px;background:white;cursor:pointer;font-family:'DM Sans',sans-serif;text-align:left;transition:all .15s;width:100%}
+    .autocomplete-item:hover{border-color:#1a1a1a;background:#faf7f2}
+    .autocomplete-name{font-size:14px;font-weight:500;color:#1a1a1a}
+    .autocomplete-cat{font-size:11px;color:#aaa;margin-top:1px}
+    .autocomplete-new{display:flex;flex-direction:column;align-items:flex-start;gap:3px;padding:12px 13px;border:1.5px dashed #e8c547;border-radius:10px;background:#fffdf0;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:13px;color:#888;text-align:left;width:100%;transition:all .15s;margin-top:4px}
+    .autocomplete-new strong{color:#1a1a1a;font-size:14px}
+    .autocomplete-new:hover{background:#fff8d0;border-color:#d4a800}
   `;
 
   // ── IMPORT PREVIEW component ───────────────────────────────────────────────
@@ -573,7 +608,7 @@ export default function App() {
                 <div className="suggestion-cat"><span>✓</span><span>Staat in het weekmenu</span></div>
               </div>
             ) : suggestion ? (
-              <div className="suggestion-card" onClick={()=>setDayPicker({dish:suggestion})}>
+              <div className="suggestion-card" onClick={()=>setDayPicker({dish:suggestion, slot:"main"})}>
                 <div className="suggestion-label">✦ Suggestie van de dag</div>
                 <div className="suggestion-name">{suggestion}</div>
                 <div className="suggestion-cat"><span>{CAT_ICONS[suggestionCat]||"🍽"}</span><span>{suggestionCat}</span></div>
@@ -607,8 +642,10 @@ export default function App() {
             {WEEK_DAYS.map((day,idx)=>{
               const isToday = idx===todayWeekIdx;
               const entry = weekMenu[day];
-              // Find recipe_url for planned dish
-              const linkedDish = entry ? flatDishes.find(d=>d.name===entry.dish) : null;
+              const mainDish = entry?.dish || null;
+              const kidsDish = entry?.kids_dish || null;
+              const linkedMain = mainDish ? flatDishes.find(d=>d.name===mainDish) : null;
+              const linkedKids = kidsDish ? flatDishes.find(d=>d.name===kidsDish) : null;
               return (
                 <div key={day} className="week-day-row">
                   <div className="wday-col">
@@ -617,22 +654,49 @@ export default function App() {
                     {isToday && <div className="wday-dot"/>}
                   </div>
                   <div className="week-dish-col">
-                    {entry ? (
+                    {/* Main dish slot */}
+                    {mainDish ? (
                       <div className={`week-dish-filled ${isToday?"today":""}`}>
-                        <div className="week-dish-name">{entry.dish}</div>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div className="week-dish-name">{mainDish}</div>
+                        </div>
                         <div className="wday-actions">
-                          {linkedDish?.recipe_url && (
-                            <a href={linkedDish.recipe_url} target="_blank" rel="noopener noreferrer"
+                          {linkedMain?.recipe_url && (
+                            <a href={linkedMain.recipe_url} target="_blank" rel="noopener noreferrer"
                               className="icon-btn filled" title="Recept openen" onClick={e=>e.stopPropagation()}>🔗</a>
                           )}
-                          <button className="icon-btn" title="Opslaan in catalogus" onClick={()=>setSaveToCatTarget(entry.dish)}>💾</button>
-                          <button className="icon-btn danger" title="Verwijder" onClick={()=>removeFromDay(day)}>×</button>
+                          <button className="icon-btn" title="Opslaan in catalogus" onClick={()=>setSaveToCatTarget(mainDish)}>💾</button>
+                          <button className="icon-btn danger" title="Verwijder" onClick={()=>removeFromDay(day,"main")}>×</button>
                         </div>
                       </div>
                     ) : (
-                      <div className="week-empty-slot" onClick={()=>{setManualDay(day);setShowManualAdd(true);}}>
+                      <div className="week-empty-slot" onClick={()=>{setManualDay(day);setManualSlot("main");setShowManualAdd(true);}}>
                         <span>＋</span><span>Gerecht toevoegen</span>
                       </div>
+                    )}
+
+                    {/* Kids dish slot — only show if main is filled */}
+                    {mainDish && (
+                      kidsDish ? (
+                        <div className="week-dish-filled kids">
+                          <div style={{flex:1,minWidth:0}}>
+                            <div className="week-dish-label kids">👶 Kinderen</div>
+                            <div className="week-dish-name" style={{fontSize:12.5}}>{kidsDish}</div>
+                          </div>
+                          <div className="wday-actions">
+                            {linkedKids?.recipe_url && (
+                              <a href={linkedKids.recipe_url} target="_blank" rel="noopener noreferrer"
+                                className="icon-btn filled" title="Recept openen" onClick={e=>e.stopPropagation()}>🔗</a>
+                            )}
+                            <button className="icon-btn" title="Opslaan in catalogus" onClick={()=>setSaveToCatTarget(kidsDish)}>💾</button>
+                            <button className="icon-btn danger" title="Verwijder kindergerecht" onClick={()=>removeFromDay(day,"kids")}>×</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button className="week-add-kids" onClick={()=>{setManualDay(day);setManualSlot("kids");setShowManualAdd(true);}}>
+                          <span>＋</span><span>Kinderen eten iets anders</span>
+                        </button>
+                      )
                     )}
                   </div>
                 </div>
@@ -676,7 +740,7 @@ export default function App() {
             {!dishes[activeCategory]?.length && <div className="empty">Nog geen gerechten</div>}
             {dishes[activeCategory]?.map(item=>(
               <DishItem key={item.id} item={item} cat={activeCategory}
-                onPlan={()=>setDayPicker({dish:item.name})}
+                onPlan={(slot)=>setDayPicker({dish:item.name, slot})}
                 onMove={()=>setMoveTarget({item,fromCat:activeCategory})}
                 onRemove={()=>removeDish(activeCategory,item.id)}
               />
@@ -705,7 +769,7 @@ export default function App() {
             {searchResults.length>0 && <>
               <div className="search-meta">{searchResults.length} gerecht{searchResults.length!==1?"en":""} gevonden</div>
               {searchResults.map(item=>(
-                <div key={item.id} className="search-item" onClick={()=>setDayPicker({dish:item.name})}>
+                <div key={item.id} className="search-item" onClick={()=>setDayPicker({dish:item.name, slot:"main"})}>
                   <div className="search-item-left">
                     <div className="search-dish"><Highlight text={item.name} query={searchQuery}/></div>
                     <div className="search-cat-badge"><span>{CAT_ICONS[item.cat]||"🍽"}</span><span>{item.cat}</span></div>
@@ -813,14 +877,18 @@ export default function App() {
           <div className="modal-overlay" onClick={()=>setDayPicker(null)}>
             <div className="modal" onClick={e=>e.stopPropagation()}>
               <div className="modal-title">Inplannen</div>
-              <div className="modal-sub">"{dayPicker.dish}"</div>
+              <div className="modal-sub">
+                "{dayPicker.dish}"
+                {dayPicker.slot === "kids" && <span style={{marginLeft:6,fontSize:11,color:"#81c784",fontWeight:600}}>👶 Kinderen</span>}
+              </div>
               <div className="day-grid">
                 {WEEK_DAYS.map((day,idx)=>{
                   const isToday = idx===todayWeekIdx;
-                  const hasDish = !!weekMenu[day];
+                  const entry = weekMenu[day];
+                  const hasDish = dayPicker.slot === "kids" ? !!entry?.kids_dish : !!entry?.dish;
                   return (
                     <button key={day} className={`day-opt ${hasDish?"has-dish":""} ${isToday?"today-opt":""}`}
-                      onClick={()=>assignDishToDay(dayPicker.dish,day)}>
+                      onClick={()=>assignDishToDay(dayPicker.dish, day, dayPicker.slot||"main")}>
                       {WEEK_DAYS_SHORT[idx]}
                       <div className="day-opt-date">{dayDate(idx)}</div>
                       {hasDish && <div className="day-opt-occupied">bezet</div>}
@@ -833,26 +901,71 @@ export default function App() {
         )}
 
         {/* ── MANUAL ADD TO WEEK MODAL ── */}
-        {showManualAdd && manualDay && (
-          <div className="modal-overlay" onClick={()=>{setShowManualAdd(false);setManualDay(null);}}>
-            <div className="modal" onClick={e=>e.stopPropagation()}>
-              <div className="modal-title">Gerecht toevoegen</div>
-              <div className="modal-sub">{manualDay}</div>
-              <div className="modal-section-label">Uit catalogus</div>
-              <div className="scroll-chips">
-                {flatDishes.map(item=>(
-                  <button key={item.id} className="chip" onClick={()=>assignDishToDay(item.name,manualDay)}>{item.name}</button>
-                ))}
-              </div>
-              <div className="modal-section-label">Of typ zelf</div>
-              <div className="modal-form">
-                <input className="add-input" placeholder="Naam gerecht..." value={manualDish} onChange={e=>setManualDish(e.target.value)}
-                  onKeyDown={e=>e.key==="Enter"&&manualDish.trim()&&assignDishToDay(manualDish.trim(),manualDay)} autoFocus/>
-                <button className="add-submit" onClick={()=>manualDish.trim()&&assignDishToDay(manualDish.trim(),manualDay)}>Toevoegen</button>
+        {showManualAdd && manualDay && (() => {
+          const q = manualDish.trim().toLowerCase();
+          const suggestions = q.length > 0
+            ? flatDishes.filter(d => d.name.toLowerCase().includes(q)).slice(0, 6)
+            : [];
+          const exactMatch = flatDishes.some(d => d.name.toLowerCase() === q);
+          const isNew = q.length > 0 && !exactMatch;
+          return (
+            <div className="modal-overlay" onClick={()=>{setShowManualAdd(false);setManualDay(null);setManualDish("");}}>
+              <div className="modal" onClick={e=>e.stopPropagation()}>
+                <div className="modal-title">Gerecht toevoegen</div>
+                <div className="modal-sub">
+                  {manualDay}
+                  {manualSlot === "kids" && <span style={{marginLeft:6,fontSize:11,color:"#81c784",fontWeight:600}}>👶 Kinderen</span>}
+                </div>
+
+                {/* Autocomplete input */}
+                <div style={{position:"relative",marginBottom:8}}>
+                  <input
+                    className="add-input" style={{width:"100%"}}
+                    placeholder="Typ om te zoeken of nieuw gerecht..."
+                    value={manualDish}
+                    onChange={e=>setManualDish(e.target.value)}
+                    onKeyDown={e=>{
+                      if (e.key==="Enter" && manualDish.trim()) {
+                        assignDishToDay(manualDish.trim(), manualDay, manualSlot);
+                        setManualDish("");
+                      }
+                    }}
+                    autoFocus
+                  />
+                </div>
+
+                {/* Autocomplete suggestions from database */}
+                {suggestions.length > 0 && (
+                  <div className="autocomplete-list">
+                    {suggestions.map(item=>(
+                      <button key={item.id} className="autocomplete-item"
+                        onClick={()=>{ assignDishToDay(item.name, manualDay, manualSlot); setManualDish(""); }}>
+                        <span className="autocomplete-name"><Highlight text={item.name} query={manualDish.trim()}/></span>
+                        <span className="autocomplete-cat">{CAT_ICONS[item.cat]||"🍽"} {item.cat}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* New dish option — only when typed text doesn't exist in DB */}
+                {isNew && (
+                  <button className="autocomplete-new"
+                    onClick={()=>{ assignDishToDay(manualDish.trim(), manualDay, manualSlot); setManualDish(""); }}>
+                    <span>＋ Toevoegen als nieuw gerecht:</span>
+                    <strong>"{manualDish.trim()}"</strong>
+                  </button>
+                )}
+
+                {/* Empty state */}
+                {!manualDish.trim() && (
+                  <div style={{color:"#bbb",fontSize:13,textAlign:"center",padding:"20px 0"}}>
+                    Begin te typen om te zoeken...
+                  </div>
+                )}
               </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* ── SAVE TO CATEGORY MODAL ── */}
         {saveToCatTarget && (
