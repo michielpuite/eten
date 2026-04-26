@@ -98,12 +98,13 @@ function Highlight({ text, query }) {
 
 // ─── APP ───────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [dishes, setDishes]     = useState({});
-  const [weekMenu, setWeekMenu] = useState({});
-  const [view, setView]         = useState("home");
+  const [dishes, setDishes]         = useState({});
+  const [weekMenu, setWeekMenu]     = useState({});     // huidige week
+  const [nextWeekMenu, setNextWeekMenu] = useState({}); // volgende week
+  const [view, setView]             = useState("home");
   const [activeCategory, setActiveCategory] = useState(null);
-  const [loaded, setLoaded]     = useState(false);
-  const [status, setStatus]     = useState("");
+  const [loaded, setLoaded]         = useState(false);
+  const [status, setStatus]         = useState("");
   const [searchQuery, setSearchQuery] = useState("");
 
   const [newDish, setNewDish]         = useState("");
@@ -112,31 +113,31 @@ export default function App() {
   const [showAddCategory, setShowAddCategory] = useState(false);
   const [moveTarget, setMoveTarget]   = useState(null);
 
-  const [dayPicker, setDayPicker]     = useState(null); // { dish, slot }
+  const [dayPicker, setDayPicker]     = useState(null); // { dish, slot, wk }
   const [showManualAdd, setShowManualAdd] = useState(false);
   const [manualDay, setManualDay]     = useState(null);
-  const [manualSlot, setManualSlot]   = useState("main"); // "main" | "kids"
+  const [manualSlot, setManualSlot]   = useState("main");
+  const [manualWk, setManualWk]       = useState(null); // weekKey for manual add
   const [manualDish, setManualDish]   = useState("");
   const [saveToCatTarget, setSaveToCatTarget] = useState(null);
-  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [clearTarget, setClearTarget] = useState(null); // weekKey to clear
 
   // ── RECEPT URL states ──────────────────────────────────────────────────────
-  // urlModal: { item } — link toevoegen/bewerken aan bestaand gerecht
   const [urlModal, setUrlModal]       = useState(null);
   const [urlInput, setUrlInput]       = useState("");
-  // importModal: URL plakken → nieuw gerecht aanmaken
   const [showImport, setShowImport]   = useState(false);
   const [importUrl, setImportUrl]     = useState("");
   const [importLoading, setImportLoading] = useState(false);
-  // importPreview: { name, category, url } — bevestig voordat opslaan
   const [importPreview, setImportPreview] = useState(null);
 
   const searchRef = useRef(null);
-  const today        = new Date();
-  const weekKey      = getWeekKey(today);
-  const monday       = getMonday(today);
-  const todayWeekIdx = today.getDay()===0 ? 6 : today.getDay()-1;
-  const todayDayName = DAYS_NL_SUN[today.getDay()];
+  const today         = new Date();
+  const weekKey       = getWeekKey(today);
+  const monday        = getMonday(today);
+  const nextMonday    = new Date(monday.getTime() + 7*86400000);
+  const nextWeekKey   = getWeekKey(nextMonday);
+  const todayWeekIdx  = today.getDay()===0 ? 6 : today.getDay()-1;
+  const todayDayName  = DAYS_NL_SUN[today.getDay()];
 
   function flash(msg, dur=2200) { setStatus(msg); setTimeout(()=>setStatus(""), dur); }
 
@@ -153,11 +154,18 @@ export default function App() {
   }, []);
 
   const loadWeekMenu = useCallback(async () => {
-    const rows = await sbFetch(`/week_menu?select=id,day_name,dish,kids_dish&week_key=eq.${weekKey}`);
-    const mapped = {};
-    for (const row of rows) mapped[row.day_name] = { id: row.id, dish: row.dish, kids_dish: row.kids_dish || null };
-    setWeekMenu(mapped);
-  }, [weekKey]);
+    const rows = await sbFetch(
+      `/week_menu?select=id,week_key,day_name,dish,kids_dish&week_key=in.(${weekKey},${nextWeekKey})`
+    );
+    const current = {}, next = {};
+    for (const row of rows) {
+      const entry = { id: row.id, dish: row.dish, kids_dish: row.kids_dish || null };
+      if (row.week_key === weekKey) current[row.day_name] = entry;
+      else next[row.day_name] = entry;
+    }
+    setWeekMenu(current);
+    setNextWeekMenu(next);
+  }, [weekKey, nextWeekKey]);
 
   useEffect(() => {
     async function init() {
@@ -275,63 +283,69 @@ export default function App() {
   }
 
   // ── WEEK MENU CRUD ────────────────────────────────────────────────────────
-  async function assignDishToDay(dish, dayName, slot = "main") {
+  function getMenuState(wk) {
+    return wk === weekKey
+      ? { menu: weekMenu, setMenu: setWeekMenu }
+      : { menu: nextWeekMenu, setMenu: setNextWeekMenu };
+  }
+
+  async function assignDishToDay(dish, dayName, slot = "main", wk = weekKey) {
+    const { menu, setMenu } = getMenuState(wk);
     try {
-      const existing = weekMenu[dayName];
+      const existing = menu[dayName];
       const field = slot === "kids" ? "kids_dish" : "dish";
       if (existing) {
         await sbFetch(`/week_menu?id=eq.${existing.id}`, {
           method: "PATCH", headers: { ...H, "Prefer": "return=minimal" },
           body: JSON.stringify({ [field]: dish })
         });
-        setWeekMenu(prev => ({ ...prev, [dayName]: { ...prev[dayName], [field]: dish } }));
+        setMenu(prev => ({ ...prev, [dayName]: { ...prev[dayName], [field]: dish } }));
       } else {
         const [row] = await sbFetch("/week_menu?select=id,day_name,dish,kids_dish", {
           method: "POST", headers: { ...H, "Prefer": "return=representation" },
-          body: JSON.stringify({ week_key: weekKey, day_name: dayName, [field]: dish })
+          body: JSON.stringify({ week_key: wk, day_name: dayName, [field]: dish })
         });
-        setWeekMenu(prev => ({ ...prev, [dayName]: { id: row.id, dish: row.dish, kids_dish: row.kids_dish || null } }));
+        setMenu(prev => ({ ...prev, [dayName]: { id: row.id, dish: row.dish, kids_dish: row.kids_dish || null } }));
       }
       flash("✓ Ingepland");
     } catch(e) { flash("⚠ " + e.message); }
     setDayPicker(null); setShowManualAdd(false); setManualDish(""); setManualDay(null);
   }
 
-  async function removeFromDay(dayName, slot = "main") {
-    const entry = weekMenu[dayName];
+  async function removeFromDay(dayName, slot = "main", wk = weekKey) {
+    const { menu, setMenu } = getMenuState(wk);
+    const entry = menu[dayName];
     if (!entry) return;
     try {
       if (slot === "kids") {
-        // Just clear kids_dish, keep main dish
         await sbFetch(`/week_menu?id=eq.${entry.id}`, {
           method: "PATCH", headers: { ...H, "Prefer": "return=minimal" },
           body: JSON.stringify({ kids_dish: null })
         });
-        setWeekMenu(prev => ({ ...prev, [dayName]: { ...prev[dayName], kids_dish: null } }));
+        setMenu(prev => ({ ...prev, [dayName]: { ...prev[dayName], kids_dish: null } }));
       } else {
-        // If no kids dish either, delete the whole row
         if (!entry.kids_dish) {
           await sbFetch(`/week_menu?id=eq.${entry.id}`, { method: "DELETE" });
-          setWeekMenu(prev => { const n={...prev}; delete n[dayName]; return n; });
+          setMenu(prev => { const n={...prev}; delete n[dayName]; return n; });
         } else {
-          // Keep row but clear main dish
           await sbFetch(`/week_menu?id=eq.${entry.id}`, {
             method: "PATCH", headers: { ...H, "Prefer": "return=minimal" },
             body: JSON.stringify({ dish: null })
           });
-          setWeekMenu(prev => ({ ...prev, [dayName]: { ...prev[dayName], dish: null } }));
+          setMenu(prev => ({ ...prev, [dayName]: { ...prev[dayName], dish: null } }));
         }
       }
       flash("✓ Verwijderd");
     } catch(e) { flash("⚠ " + e.message); }
   }
 
-  async function clearWeek() {
+  async function clearWeek(wk) {
+    const { setMenu } = getMenuState(wk);
     try {
-      await sbFetch(`/week_menu?week_key=eq.${weekKey}`, { method: "DELETE" });
-      setWeekMenu({}); flash("✓ Week geleegd");
+      await sbFetch(`/week_menu?week_key=eq.${wk}`, { method: "DELETE" });
+      setMenu({}); flash("✓ Week geleegd");
     } catch(e) { flash("⚠ " + e.message); }
-    setShowClearConfirm(false);
+    setClearTarget(null);
   }
 
   async function saveDishToCategory(dishName, cat) {
@@ -631,82 +645,103 @@ export default function App() {
         </>}
 
         {/* ── WEEK ── */}
-        {view==="week" && <>
-          <div className="week-header">
-            <div style={{fontFamily:"'Playfair Display',serif",fontSize:24,fontWeight:700}}>Week {weekKey.split("-W")[1]}</div>
-            <div className="week-subtitle">
-              {monday.toLocaleDateString("nl-NL",{day:"numeric",month:"long"})} – {new Date(monday.getTime()+6*86400000).toLocaleDateString("nl-NL",{day:"numeric",month:"long"})}
-            </div>
-          </div>
-          <div className="week-list">
-            {WEEK_DAYS.map((day,idx)=>{
-              const isToday = idx===todayWeekIdx;
-              const entry = weekMenu[day];
-              const mainDish = entry?.dish || null;
-              const kidsDish = entry?.kids_dish || null;
-              const linkedMain = mainDish ? flatDishes.find(d=>d.name===mainDish) : null;
-              const linkedKids = kidsDish ? flatDishes.find(d=>d.name===kidsDish) : null;
-              return (
-                <div key={day} className="week-day-row">
-                  <div className="wday-col">
-                    <div className={`wday-label ${isToday?"today":""}`}>{WEEK_DAYS_SHORT[idx]}</div>
-                    <div className="wday-date">{dayDate(idx)}</div>
-                    {isToday && <div className="wday-dot"/>}
-                  </div>
-                  <div className="week-dish-col">
-                    {/* Main dish slot */}
-                    {mainDish ? (
-                      <div className={`week-dish-filled ${isToday?"today":""}`}>
-                        <div style={{flex:1,minWidth:0}}>
-                          <div className="week-dish-name">{mainDish}</div>
-                        </div>
-                        <div className="wday-actions">
-                          {linkedMain?.recipe_url && (
-                            <a href={linkedMain.recipe_url} target="_blank" rel="noopener noreferrer"
-                              className="icon-btn filled" title="Recept openen" onClick={e=>e.stopPropagation()}>🔗</a>
-                          )}
-                          <button className="icon-btn" title="Opslaan in catalogus" onClick={()=>setSaveToCatTarget(mainDish)}>💾</button>
-                          <button className="icon-btn danger" title="Verwijder" onClick={()=>removeFromDay(day,"main")}>×</button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="week-empty-slot" onClick={()=>{setManualDay(day);setManualSlot("main");setShowManualAdd(true);}}>
-                        <span>＋</span><span>Gerecht toevoegen</span>
-                      </div>
-                    )}
+        {view==="week" && (() => {
+          function dayDateFor(startMonday, idx) {
+            const d = new Date(startMonday); d.setDate(d.getDate()+idx);
+            return d.toLocaleDateString("nl-NL",{day:"numeric",month:"short"});
+          }
 
-                    {/* Kids dish slot — only show if main is filled */}
-                    {mainDish && (
-                      kidsDish ? (
-                        <div className="week-dish-filled kids">
-                          <div style={{flex:1,minWidth:0}}>
-                            <div className="week-dish-label kids">👶 Kinderen</div>
-                            <div className="week-dish-name" style={{fontSize:12.5}}>{kidsDish}</div>
-                          </div>
-                          <div className="wday-actions">
-                            {linkedKids?.recipe_url && (
-                              <a href={linkedKids.recipe_url} target="_blank" rel="noopener noreferrer"
-                                className="icon-btn filled" title="Recept openen" onClick={e=>e.stopPropagation()}>🔗</a>
-                            )}
-                            <button className="icon-btn" title="Opslaan in catalogus" onClick={()=>setSaveToCatTarget(kidsDish)}>💾</button>
-                            <button className="icon-btn danger" title="Verwijder kindergerecht" onClick={()=>removeFromDay(day,"kids")}>×</button>
-                          </div>
-                        </div>
-                      ) : (
-                        <button className="week-add-kids" onClick={()=>{setManualDay(day);setManualSlot("kids");setShowManualAdd(true);}}>
-                          <span>＋</span><span>Kinderen eten iets anders</span>
-                        </button>
-                      )
-                    )}
+          function WeekSection({ label, wk, menu, startMonday, showToday }) {
+            const wkNum = wk.split("-W")[1];
+            const endDate = new Date(startMonday.getTime()+6*86400000);
+            return (
+              <div style={{marginBottom:8}}>
+                {/* Week header */}
+                <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",padding:"20px 20px 2px"}}>
+                  <div>
+                    <div style={{fontFamily:"'Playfair Display',serif",fontSize:20,fontWeight:700,lineHeight:1}}>{label}</div>
+                    <div style={{fontSize:11.5,color:"#aaa",marginTop:3}}>
+                      {startMonday.toLocaleDateString("nl-NL",{day:"numeric",month:"long"})} – {endDate.toLocaleDateString("nl-NL",{day:"numeric",month:"long"})} &nbsp;·&nbsp; week {wkNum}
+                    </div>
                   </div>
+                  <button className="week-clear-btn" style={{padding:"6px 10px",fontSize:12}} onClick={()=>setClearTarget(wk)}>🗑</button>
                 </div>
-              );
-            })}
-          </div>
-          <div className="week-actions-row">
-            <button className="week-clear-btn" onClick={()=>setShowClearConfirm(true)}>🗑 Hele week legen</button>
-          </div>
-        </>}
+
+                {/* Days */}
+                <div className="week-list" style={{paddingTop:10}}>
+                  {WEEK_DAYS.map((day,idx)=>{
+                    const isToday = showToday && idx===todayWeekIdx;
+                    const entry = menu[day];
+                    const mainDish = entry?.dish || null;
+                    const kidsDish = entry?.kids_dish || null;
+                    const linkedMain = mainDish ? flatDishes.find(d=>d.name===mainDish) : null;
+                    const linkedKids = kidsDish ? flatDishes.find(d=>d.name===kidsDish) : null;
+                    return (
+                      <div key={day} className="week-day-row">
+                        <div className="wday-col">
+                          <div className={`wday-label ${isToday?"today":""}`}>{WEEK_DAYS_SHORT[idx]}</div>
+                          <div className="wday-date">{dayDateFor(startMonday,idx)}</div>
+                          {isToday && <div className="wday-dot"/>}
+                        </div>
+                        <div className="week-dish-col">
+                          {mainDish ? (
+                            <div className={`week-dish-filled ${isToday?"today":""}`}>
+                              <div style={{flex:1,minWidth:0}}>
+                                <div className="week-dish-name">{mainDish}</div>
+                              </div>
+                              <div className="wday-actions">
+                                {linkedMain?.recipe_url && (
+                                  <a href={linkedMain.recipe_url} target="_blank" rel="noopener noreferrer"
+                                    className="icon-btn filled" onClick={e=>e.stopPropagation()}>🔗</a>
+                                )}
+                                <button className="icon-btn" onClick={()=>setSaveToCatTarget(mainDish)}>💾</button>
+                                <button className="icon-btn danger" onClick={()=>removeFromDay(day,"main",wk)}>×</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="week-empty-slot" onClick={()=>{setManualDay(day);setManualSlot("main");setManualWk(wk);setShowManualAdd(true);}}>
+                              <span>＋</span><span>Gerecht toevoegen</span>
+                            </div>
+                          )}
+                          {mainDish && (
+                            kidsDish ? (
+                              <div className="week-dish-filled kids">
+                                <div style={{flex:1,minWidth:0}}>
+                                  <div className="week-dish-label kids">👶 Kinderen</div>
+                                  <div className="week-dish-name" style={{fontSize:12.5}}>{kidsDish}</div>
+                                </div>
+                                <div className="wday-actions">
+                                  {linkedKids?.recipe_url && (
+                                    <a href={linkedKids.recipe_url} target="_blank" rel="noopener noreferrer"
+                                      className="icon-btn filled" onClick={e=>e.stopPropagation()}>🔗</a>
+                                  )}
+                                  <button className="icon-btn" onClick={()=>setSaveToCatTarget(kidsDish)}>💾</button>
+                                  <button className="icon-btn danger" onClick={()=>removeFromDay(day,"kids",wk)}>×</button>
+                                </div>
+                              </div>
+                            ) : (
+                              <button className="week-add-kids" onClick={()=>{setManualDay(day);setManualSlot("kids");setManualWk(wk);setShowManualAdd(true);}}>
+                                <span>＋</span><span>Kinderen eten iets anders</span>
+                              </button>
+                            )
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          }
+
+          return (
+            <>
+              <WeekSection label="Deze week" wk={weekKey} menu={weekMenu} startMonday={monday} showToday={true}/>
+              <div style={{height:1,background:"#ede9e0",margin:"8px 20px 0"}}/>
+              <WeekSection label="Volgende week" wk={nextWeekKey} menu={nextWeekMenu} startMonday={nextMonday} showToday={false}/>
+            </>
+          );
+        })()}
 
         {/* ── BLADEREN ── */}
         {view==="browse" && <>
@@ -881,16 +916,36 @@ export default function App() {
                 "{dayPicker.dish}"
                 {dayPicker.slot === "kids" && <span style={{marginLeft:6,fontSize:11,color:"#81c784",fontWeight:600}}>👶 Kinderen</span>}
               </div>
-              <div className="day-grid">
+
+              {/* Deze week */}
+              <div className="modal-section-label" style={{marginBottom:8}}>Deze week</div>
+              <div className="day-grid" style={{marginBottom:16}}>
                 {WEEK_DAYS.map((day,idx)=>{
                   const isToday = idx===todayWeekIdx;
-                  const entry = weekMenu[day];
-                  const hasDish = dayPicker.slot === "kids" ? !!entry?.kids_dish : !!entry?.dish;
+                  const hasDish = dayPicker.slot==="kids" ? !!weekMenu[day]?.kids_dish : !!weekMenu[day]?.dish;
                   return (
                     <button key={day} className={`day-opt ${hasDish?"has-dish":""} ${isToday?"today-opt":""}`}
-                      onClick={()=>assignDishToDay(dayPicker.dish, day, dayPicker.slot||"main")}>
+                      onClick={()=>assignDishToDay(dayPicker.dish, day, dayPicker.slot||"main", weekKey)}>
                       {WEEK_DAYS_SHORT[idx]}
                       <div className="day-opt-date">{dayDate(idx)}</div>
+                      {hasDish && <div className="day-opt-occupied">bezet</div>}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Volgende week */}
+              <div className="modal-section-label" style={{marginBottom:8}}>Volgende week</div>
+              <div className="day-grid">
+                {WEEK_DAYS.map((day,idx)=>{
+                  const d = new Date(nextMonday); d.setDate(d.getDate()+idx);
+                  const dateStr = d.toLocaleDateString("nl-NL",{day:"numeric",month:"short"});
+                  const hasDish = dayPicker.slot==="kids" ? !!nextWeekMenu[day]?.kids_dish : !!nextWeekMenu[day]?.dish;
+                  return (
+                    <button key={day} className={`day-opt ${hasDish?"has-dish":""}`}
+                      onClick={()=>assignDishToDay(dayPicker.dish, day, dayPicker.slot||"main", nextWeekKey)}>
+                      {WEEK_DAYS_SHORT[idx]}
+                      <div className="day-opt-date">{dateStr}</div>
                       {hasDish && <div className="day-opt-occupied">bezet</div>}
                     </button>
                   );
@@ -917,7 +972,6 @@ export default function App() {
                   {manualSlot === "kids" && <span style={{marginLeft:6,fontSize:11,color:"#81c784",fontWeight:600}}>👶 Kinderen</span>}
                 </div>
 
-                {/* Autocomplete input */}
                 <div style={{position:"relative",marginBottom:8}}>
                   <input
                     className="add-input" style={{width:"100%"}}
@@ -926,7 +980,7 @@ export default function App() {
                     onChange={e=>setManualDish(e.target.value)}
                     onKeyDown={e=>{
                       if (e.key==="Enter" && manualDish.trim()) {
-                        assignDishToDay(manualDish.trim(), manualDay, manualSlot);
+                        assignDishToDay(manualDish.trim(), manualDay, manualSlot, manualWk);
                         setManualDish("");
                       }
                     }}
@@ -934,12 +988,11 @@ export default function App() {
                   />
                 </div>
 
-                {/* Autocomplete suggestions from database */}
                 {suggestions.length > 0 && (
                   <div className="autocomplete-list">
                     {suggestions.map(item=>(
                       <button key={item.id} className="autocomplete-item"
-                        onClick={()=>{ assignDishToDay(item.name, manualDay, manualSlot); setManualDish(""); }}>
+                        onClick={()=>{ assignDishToDay(item.name, manualDay, manualSlot, manualWk); setManualDish(""); }}>
                         <span className="autocomplete-name"><Highlight text={item.name} query={manualDish.trim()}/></span>
                         <span className="autocomplete-cat">{CAT_ICONS[item.cat]||"🍽"} {item.cat}</span>
                       </button>
@@ -947,16 +1000,14 @@ export default function App() {
                   </div>
                 )}
 
-                {/* New dish option — only when typed text doesn't exist in DB */}
                 {isNew && (
                   <button className="autocomplete-new"
-                    onClick={()=>{ assignDishToDay(manualDish.trim(), manualDay, manualSlot); setManualDish(""); }}>
+                    onClick={()=>{ assignDishToDay(manualDish.trim(), manualDay, manualSlot, manualWk); setManualDish(""); }}>
                     <span>＋ Toevoegen als nieuw gerecht:</span>
                     <strong>"{manualDish.trim()}"</strong>
                   </button>
                 )}
 
-                {/* Empty state */}
                 {!manualDish.trim() && (
                   <div style={{color:"#bbb",fontSize:13,textAlign:"center",padding:"20px 0"}}>
                     Begin te typen om te zoeken...
@@ -1022,14 +1073,14 @@ export default function App() {
         )}
 
         {/* ── WEEK LEEGMAKEN CONFIRM ── */}
-        {showClearConfirm && (
-          <div className="modal-overlay" onClick={()=>setShowClearConfirm(false)}>
+        {clearTarget && (
+          <div className="modal-overlay" onClick={()=>setClearTarget(null)}>
             <div className="modal" onClick={e=>e.stopPropagation()}>
-              <div className="modal-title">Hele week legen?</div>
-              <div className="modal-sub">Alle geplande gerechten voor deze week worden verwijderd. Dit kan niet ongedaan worden gemaakt.</div>
+              <div className="modal-title">{clearTarget===weekKey?"Deze week":"Volgende week"} legen?</div>
+              <div className="modal-sub">Alle geplande gerechten worden verwijderd. Dit kan niet ongedaan worden gemaakt.</div>
               <div className="confirm-btns">
-                <button className="btn-cancel" onClick={()=>setShowClearConfirm(false)}>Annuleren</button>
-                <button className="btn-danger" onClick={clearWeek}>Ja, legen</button>
+                <button className="btn-cancel" onClick={()=>setClearTarget(null)}>Annuleren</button>
+                <button className="btn-danger" onClick={()=>clearWeek(clearTarget)}>Ja, legen</button>
               </div>
             </div>
           </div>
